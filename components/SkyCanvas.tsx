@@ -168,22 +168,6 @@ const SkyCanvas = forwardRef<SkyCanvasHandle, Props>(function SkyCanvas(
       // Subtle Milky Way band (decorative — equatorial fuzz).
       drawMilkyWay(ctx, cam, w, h);
 
-      // Ground (if horizon visible).
-      if (opts.showHorizon && horizonY != null) {
-        const gh = ctx.createLinearGradient(0, horizonY, 0, h);
-        gh.addColorStop(0, "rgba(8, 12, 30, 0.15)");
-        gh.addColorStop(0.4, "rgba(6, 10, 24, 0.6)");
-        gh.addColorStop(1, "rgba(4, 6, 16, 0.95)");
-        ctx.fillStyle = gh;
-        ctx.fillRect(0, horizonY, w, h - horizonY);
-        ctx.strokeStyle = "rgba(122, 162, 255, 0.35)";
-        ctx.lineWidth = 1.5 * dpr;
-        ctx.beginPath();
-        ctx.moveTo(0, horizonY);
-        ctx.lineTo(w, horizonY);
-        ctx.stroke();
-      }
-
       const projections: CanvasObject[] = [];
 
       // --- Constellations (drawn behind stars) ---
@@ -198,7 +182,6 @@ const SkyCanvas = forwardRef<SkyCanvasHandle, Props>(function SkyCanvas(
             const sa = starsArr[a];
             const sb = starsArr[b];
             if (!sa || !sb) continue;
-            if (sa.altRad < -0.25 && sb.altRad < -0.25) continue;
             const pa = project(sa.altRad, sa.azRad, cam, w, h);
             const pb = project(sb.altRad, sb.azRad, cam, w, h);
             if (!pa.visible || !pb.visible) continue;
@@ -214,7 +197,6 @@ const SkyCanvas = forwardRef<SkyCanvasHandle, Props>(function SkyCanvas(
       // --- Stars ---
       const starsArr = starsRef.current;
       for (const s of starsArr) {
-        if (s.altRad < -0.18) continue;
         const p = project(s.altRad, s.azRad, cam, w, h);
         if (!p.visible) continue;
         if (p.edge > 1.7) continue;
@@ -246,7 +228,6 @@ const SkyCanvas = forwardRef<SkyCanvasHandle, Props>(function SkyCanvas(
 
       // --- Deep-sky objects ---
       for (const dso of deepSkyRef.current) {
-        if (dso.altRad < -0.1) continue;
         const p = project(dso.altRad, dso.azRad, cam, w, h);
         if (!p.visible || p.edge > 1.6) continue;
         const r = 6 * dpr;
@@ -278,7 +259,6 @@ const SkyCanvas = forwardRef<SkyCanvasHandle, Props>(function SkyCanvas(
 
       // --- Solar System bodies (Sun, Moon, planets) ---
       for (const b of bodiesRef.current) {
-        if (b.altRad < -0.18) continue;
         const p = project(b.altRad, b.azRad, cam, w, h);
         if (!p.visible || p.edge > 1.6) continue;
         const r = bodyRadius(b, dpr);
@@ -305,6 +285,25 @@ const SkyCanvas = forwardRef<SkyCanvasHandle, Props>(function SkyCanvas(
           y: p.y,
           radius: r,
         });
+      }
+
+      // --- Ground overlay (semi-transparent; objects below horizon remain
+      //     faintly visible and tappable). Drawn AFTER objects so it fades them. ---
+      if (opts.showHorizon && horizonY != null && horizonY < h) {
+        const groundTop = Math.max(0, horizonY);
+        const gh = ctx.createLinearGradient(0, groundTop, 0, h);
+        gh.addColorStop(0, "rgba(2, 4, 12, 0.35)");
+        gh.addColorStop(0.35, "rgba(2, 4, 12, 0.72)");
+        gh.addColorStop(1, "rgba(0, 0, 6, 0.88)");
+        ctx.fillStyle = gh;
+        ctx.fillRect(0, groundTop, w, h - groundTop);
+        // Horizon line
+        ctx.strokeStyle = "rgba(122, 162, 255, 0.45)";
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(0, horizonY);
+        ctx.lineTo(w, horizonY);
+        ctx.stroke();
       }
 
       // --- Cardinal directions on the horizon ---

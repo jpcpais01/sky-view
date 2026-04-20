@@ -12,7 +12,7 @@ export const wrap = (x: number, period: number) => {
   return r < 0 ? r + period : r;
 };
 const wrap360 = (d: number) => wrap(d, 360);
-const wrap2pi = (r: number) => wrap(r, TWO_PI);
+export const wrap2pi = (r: number) => wrap(r, TWO_PI);
 
 // --- Time ----------------------------------------------------------------
 
@@ -40,7 +40,8 @@ export function localSiderealTime(date: Date, longitudeDeg: number): number {
 export type Equatorial = { ra: number; dec: number }; // ra in radians, dec in radians
 export type Horizontal = { alt: number; az: number }; // both in radians
 
-/** Convert equatorial → horizontal. RA & Dec in radians. lat in radians. */
+/** Convert equatorial → horizontal. RA & Dec in radians. lat in radians.
+ *  Returns altitude and azimuth measured clockwise from North (compass convention). */
 export function equatorialToHorizontal(
   raRad: number,
   decRad: number,
@@ -48,16 +49,22 @@ export function equatorialToHorizontal(
   latRad: number,
 ): Horizontal {
   const ha = lstRad - raRad;
-  const sinAlt =
-    Math.sin(decRad) * Math.sin(latRad) +
-    Math.cos(decRad) * Math.cos(latRad) * Math.cos(ha);
+  const sinDec = Math.sin(decRad);
+  const cosDec = Math.cos(decRad);
+  const sinLat = Math.sin(latRad);
+  const cosLat = Math.cos(latRad);
+  const sinHa = Math.sin(ha);
+  const cosHa = Math.cos(ha);
+
+  const sinAlt = sinDec * sinLat + cosDec * cosLat * cosHa;
   const alt = Math.asin(Math.max(-1, Math.min(1, sinAlt)));
-  // Azimuth measured from North through East.
-  const y = Math.sin(ha);
-  const x = Math.cos(ha) * Math.sin(latRad) - Math.tan(decRad) * Math.cos(latRad);
-  let az = Math.atan2(y, x);
-  az = Math.PI - az;
-  return { alt, az: wrap2pi(az) };
+
+  // Azimuth from North, clockwise through East.
+  // Direct formula avoids the atan2 sign-flip ambiguity of the Meeus form.
+  const y = -sinHa * cosDec;
+  const x = sinDec * cosLat - sinLat * cosDec * cosHa;
+  const az = wrap2pi(Math.atan2(y, x));
+  return { alt, az };
 }
 
 // --- Sun -----------------------------------------------------------------

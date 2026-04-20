@@ -7,15 +7,18 @@ import SkyCanvas, {
 } from "@/components/SkyCanvas";
 import ObjectInfoModal from "@/components/ObjectInfoModal";
 import {
+  DEG,
   resolveDeepSky,
   resolveSolarSystem,
   resolveStars,
+  wrap2pi,
   type Camera,
 } from "@/lib/astronomy";
 import { useLocation } from "@/lib/useLocation";
 import { useOrientation } from "@/lib/useOrientation";
 
 const SETUP_KEY = "skyview:setup-done";
+const CAL_KEY = "skyview:compass-offset";
 
 function loadSetupDone(): boolean {
   if (typeof window === "undefined") return false;
@@ -24,6 +27,17 @@ function loadSetupDone(): boolean {
 function saveSetupDone() {
   if (typeof window === "undefined") return;
   localStorage.setItem(SETUP_KEY, "true");
+}
+function loadCompassOffset(): number {
+  if (typeof window === "undefined") return 0;
+  const raw = localStorage.getItem(CAL_KEY);
+  if (!raw) return 0;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+function saveCompassOffset(rad: number) {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(CAL_KEY, rad.toString());
 }
 
 export default function SkyPage() {
@@ -35,7 +49,23 @@ export default function SkyPage() {
   const [selected, setSelected] = useState<SkyObject | null>(null);
   const [showConstellations, setShowConstellations] = useState(true);
   const [showLabels, setShowLabels] = useState(true);
+  const [compassOffset, setCompassOffset] = useState(0);
+  const [showCalibration, setShowCalibration] = useState(false);
   const canvasRef = useRef<SkyCanvasHandle | null>(null);
+
+  // Load persisted compass offset once on mount.
+  useEffect(() => {
+    setCompassOffset(loadCompassOffset());
+  }, []);
+
+  const updateCompassOffset = useCallback((rad: number) => {
+    // Clamp to (-π, π] then persist.
+    let v = rad;
+    while (v > Math.PI) v -= Math.PI * 2;
+    while (v <= -Math.PI) v += Math.PI * 2;
+    setCompassOffset(v);
+    saveCompassOffset(v);
+  }, []);
 
   // Refresh sky positions every 10s.
   useEffect(() => {
@@ -66,12 +96,12 @@ export default function SkyPage() {
 
   const camera: Camera = useMemo(
     () => ({
-      yaw: orientation.yaw,
+      yaw: wrap2pi(orientation.yaw + compassOffset),
       pitch: orientation.pitch,
       roll: orientation.roll,
       fovV: 1.1,
     }),
-    [orientation.yaw, orientation.pitch, orientation.roll],
+    [orientation.yaw, orientation.pitch, orientation.roll, compassOffset],
   );
 
   const enable = useCallback(
@@ -102,13 +132,14 @@ export default function SkyPage() {
   };
 
   const headingLabel = useMemo(() => {
-    const az = ((orientation.yaw * 180) / Math.PI + 360) % 360;
+    const az =
+      ((camera.yaw * 180) / Math.PI + 360) % 360;
     const alt = (orientation.pitch * 180) / Math.PI;
     return {
       heading: `${az.toFixed(0)}° ${compass(az)}`,
       altitude: `${alt >= 0 ? "+" : ""}${alt.toFixed(0)}°`,
     };
-  }, [orientation.yaw, orientation.pitch]);
+  }, [camera.yaw, orientation.pitch]);
 
   // Show the intro overlay when sensors aren't active yet.
   // On iOS (permission === "prompt"), always show until user taps enable.
@@ -162,7 +193,7 @@ export default function SkyPage() {
       </div>
 
       {/* Side toggles */}
-      <div className="pointer-events-none absolute right-3 top-[calc(max(env(safe-area-inset-top),12px)+70px)] flex flex-col gap-2">
+      <div className="pointer-events-none absolute right-3 top-[calc(max(env(safe-area-inset-top),12px)+70px)] flex flex-col gap-2 items-end">
         <ToggleButton
           active={showConstellations}
           onClick={() => setShowConstellations((v) => !v)}
@@ -173,7 +204,35 @@ export default function SkyPage() {
           onClick={() => setShowLabels((v) => !v)}
           label="Labels"
         />
+        <button
+          onClick={() => setShowCalibration((v) => !v)}
+          aria-label="Compass calibration"
+          className={[
+            "pointer-events-auto glass rounded-full size-9 flex items-center justify-center transition-colors",
+            showCalibration || compassOffset !== 0
+              ? "text-[var(--accent-strong)] border-[var(--border-strong)]"
+              : "text-[var(--muted)]",
+          ].join(" ")}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 3v3M12 18v3M3 12h3M18 12h3" />
+            <path d="m15.5 8.5-2.2 5.8-5.8 2.2 2.2-5.8z" />
+          </svg>
+        </button>
       </div>
+
+      {/* Calibration panel */}
+      {showCalibration && (
+        <CalibrationPanel
+          offsetRad={compassOffset}
+          onChange={updateCompassOffset}
+          onClose={() => setShowCalibration(false)}
+          rawHeadingDeg={
+            ((orientation.yaw * 180) / Math.PI + 360) % 360
+          }
+        />
+      )}
 
       {/* Intro / permissions overlay */}
       {needsIntro && (
@@ -352,6 +411,116 @@ function SkyIntro({
         </p>
       </div>
     </div>
+  );
+}
+
+function CalibrationPanel({
+  offsetRad,
+  onChange,
+  onClose,
+  rawHeadingDeg,
+}: {
+  offsetRad: number;
+  onChange: (rad: number) => void;
+  onClose: () => void;
+  rawHeadingDeg: number;
+}) {
+  const offsetDeg = offsetRad * (180 / Math.PI);
+  const correctedHeading = (rawHeadingDeg + offsetDeg + 360) % 360;
+
+  const setDeg = (deg: number) => onChange(deg * DEG);
+  const nudge = (delta: number) => setDeg(offsetDeg + delta);
+
+  return (
+    <div className="absolute inset-x-0 bottom-0 pb-[calc(env(safe-area-inset-bottom)+76px)] px-3 z-20">
+      <div className="glass-strong mx-auto max-w-md rounded-2xl p-4 sheet-up">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-[0.22em] text-[var(--accent-strong)]/80 font-semibold">
+              Compass calibration
+            </p>
+            <p className="text-[12px] text-[var(--muted)] leading-snug mt-0.5">
+              Rotate the sky to match what you actually see.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="size-8 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-[var(--muted)]"
+          >
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
+              <path d="M6 6l12 12M6 18L18 6" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 mb-3 tabular-nums">
+          <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--muted)]">Offset</p>
+            <p className="text-[15px] font-semibold">
+              {offsetDeg >= 0 ? "+" : ""}
+              {offsetDeg.toFixed(1)}°
+            </p>
+          </div>
+          <div className="rounded-xl bg-white/5 border border-white/10 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-[var(--muted)]">Shown heading</p>
+            <p className="text-[15px] font-semibold">
+              {correctedHeading.toFixed(0)}° {compass(correctedHeading)}
+            </p>
+          </div>
+        </div>
+
+        <input
+          type="range"
+          min={-180}
+          max={180}
+          step={0.5}
+          value={Number(offsetDeg.toFixed(1))}
+          onChange={(e) => setDeg(parseFloat(e.target.value))}
+          className="w-full accent-[var(--accent)]"
+          aria-label="Compass offset"
+        />
+        <div className="flex justify-between text-[10px] text-[var(--muted)] mt-1 tabular-nums">
+          <span>−180°</span>
+          <span>0°</span>
+          <span>+180°</span>
+        </div>
+
+        <div className="flex gap-2 mt-3">
+          <FineButton onClick={() => nudge(-5)}>−5°</FineButton>
+          <FineButton onClick={() => nudge(-1)}>−1°</FineButton>
+          <FineButton onClick={() => nudge(1)}>+1°</FineButton>
+          <FineButton onClick={() => nudge(5)}>+5°</FineButton>
+          <button
+            onClick={() => setDeg(0)}
+            className="flex-1 rounded-xl py-2 text-[12px] font-semibold bg-white/5 hover:bg-white/10 text-[var(--muted)] transition-colors"
+          >
+            Reset
+          </button>
+        </div>
+
+        <p className="mt-3 text-[11px] text-[var(--muted)] leading-snug">
+          Tip: point your phone at a known star or landmark, then adjust until the label matches.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function FineButton({
+  onClick,
+  children,
+}: {
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex-1 rounded-xl py-2 text-[12px] font-semibold tabular-nums bg-white/8 hover:bg-white/14 text-[var(--foreground)]/90 transition-colors"
+    >
+      {children}
+    </button>
   );
 }
 
