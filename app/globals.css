@@ -136,6 +136,21 @@ body {
   animation: sheet-up 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+@keyframes sheet-down {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.sheet-down {
+  animation: sheet-down 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 @keyframes fade-in {
   from {
     opacity: 0;

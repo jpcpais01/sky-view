@@ -103,7 +103,7 @@ export function useOrientation(enabled: boolean): OrientationHook {
       const target = targetRef.current;
       setState((prev) => {
         if (!target.hasReading) return prev;
-        const t = 0.18; // lerp factor
+        const t = 0.28; // lerp factor — snappier tilt tracking
         return {
           hasReading: true,
           absolute: target.absolute,

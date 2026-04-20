@@ -16,17 +16,30 @@ import {
 import { useLocation } from "@/lib/useLocation";
 import { CONSTELLATIONS, STARS } from "@/lib/catalog";
 
-const MIN_FOV = 0.35; // radians (~20°) — zoomed in
-const MAX_FOV = 2.3; // radians (~132°) — wide
+const MIN_FOV = 0.35;
+const MAX_FOV = 2.3;
 const DEFAULT_FOV = 1.4;
-const TAP_MAX_MOVE = 10; // px
+const TAP_MAX_MOVE = 10;
 
 export default function ExplorePage() {
   const { location } = useLocation();
-  const [now, setNow] = useState(() => new Date());
+
+  // Real clock ticks every 30s; timeOffsetHours shifts it for time travel.
+  const [realNow, setRealNow] = useState(() => new Date());
+  const [timeOffsetHours, setTimeOffsetHours] = useState(0);
+  const now = useMemo(
+    () => new Date(realNow.getTime() + timeOffsetHours * 3_600_000),
+    [realNow, timeOffsetHours],
+  );
+
+  useEffect(() => {
+    const t = setInterval(() => setRealNow(new Date()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+
   const [camera, setCamera] = useState<Camera>(() => ({
-    yaw: Math.PI, // looking south by default
-    pitch: 0.6, // slightly above horizon
+    yaw: Math.PI,
+    pitch: 0.6,
     roll: 0,
     fovV: DEFAULT_FOV,
   }));
@@ -36,11 +49,6 @@ export default function ExplorePage() {
   const [searchOpen, setSearchOpen] = useState(false);
   const canvasHandleRef = useRef<SkyCanvasHandle | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 30000);
-    return () => clearInterval(t);
-  }, []);
 
   const stars = useMemo(
     () => resolveStars(now, location.lat, location.lon),
@@ -55,17 +63,14 @@ export default function ExplorePage() {
     [now, location.lat, location.lon],
   );
 
-  const centerOn = useCallback(
-    (alt: number, az: number, narrow = false) => {
-      setCamera((cam) => ({
-        yaw: ((az % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI),
-        pitch: Math.max(-0.5, Math.min(Math.PI / 2 - 0.05, alt)),
-        roll: 0,
-        fovV: narrow ? Math.max(MIN_FOV, Math.min(cam.fovV, 0.6)) : cam.fovV,
-      }));
-    },
-    [],
-  );
+  const centerOn = useCallback((alt: number, az: number, narrow = false) => {
+    setCamera((cam) => ({
+      yaw: ((az % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI),
+      pitch: Math.max(-0.5, Math.min(Math.PI / 2 - 0.05, alt)),
+      roll: 0,
+      fovV: narrow ? Math.max(MIN_FOV, Math.min(cam.fovV, 0.6)) : cam.fovV,
+    }));
+  }, []);
 
   const handleCenterObject = useCallback(
     (object: SkyObject) => {
@@ -75,15 +80,10 @@ export default function ExplorePage() {
     [centerOn],
   );
 
-  // --- Pointer handling: drag to pan, pinch to zoom, tap to select ---
+  // --- Pointer handling ---
   type Pt = { x: number; y: number };
   const pointers = useRef<Map<number, Pt>>(new Map());
-  const pinchRef = useRef<{
-    startDist: number;
-    startFov: number;
-    centerX: number;
-    centerY: number;
-  } | null>(null);
+  const pinchRef = useRef<{ startDist: number; startFov: number } | null>(null);
   const dragRef = useRef<{
     startYaw: number;
     startPitch: number;
@@ -94,8 +94,7 @@ export default function ExplorePage() {
   } | null>(null);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const el = e.currentTarget;
-    el.setPointerCapture?.(e.pointerId);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.current.size === 1) {
       dragRef.current = {
@@ -109,13 +108,9 @@ export default function ExplorePage() {
     } else if (pointers.current.size === 2) {
       dragRef.current = null;
       const [a, b] = Array.from(pointers.current.values());
-      const dx = a.x - b.x;
-      const dy = a.y - b.y;
       pinchRef.current = {
-        startDist: Math.hypot(dx, dy),
+        startDist: Math.hypot(a.x - b.x, a.y - b.y),
         startFov: camera.fovV,
-        centerX: (a.x + b.x) / 2,
-        centerY: (a.y + b.y) / 2,
       };
     }
   };
@@ -127,38 +122,25 @@ export default function ExplorePage() {
     if (pointers.current.size >= 2 && pinchRef.current) {
       const [a, b] = Array.from(pointers.current.values());
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
-      const ratio = pinchRef.current.startDist / Math.max(1, dist);
       const nextFov = Math.max(
         MIN_FOV,
-        Math.min(MAX_FOV, pinchRef.current.startFov * ratio),
+        Math.min(MAX_FOV, pinchRef.current.startFov * (pinchRef.current.startDist / Math.max(1, dist))),
       );
       setCamera((cam) => ({ ...cam, fovV: nextFov }));
       return;
     }
 
-    if (
-      pointers.current.size === 1 &&
-      dragRef.current &&
-      dragRef.current.pointerId === e.pointerId
-    ) {
+    if (pointers.current.size === 1 && dragRef.current?.pointerId === e.pointerId) {
       const d = dragRef.current;
       const container = containerRef.current;
       if (!container) return;
       const rect = container.getBoundingClientRect();
       const dx = e.clientX - d.startX;
       const dy = e.clientY - d.startY;
-      if (
-        !d.moved &&
-        Math.sqrt(dx * dx + dy * dy) > TAP_MAX_MOVE
-      ) {
-        d.moved = true;
-      }
+      if (!d.moved && Math.hypot(dx, dy) > TAP_MAX_MOVE) d.moved = true;
       if (d.moved) {
-        // Pixels → radians using current FOV.
         const radPerPx = camera.fovV / rect.height;
-        const nextYaw =
-          d.startYaw - dx * radPerPx * Math.cos(camera.pitch) -
-          0 * dy; // yaw doesn't depend on dy
+        const nextYaw = d.startYaw - dx * radPerPx * Math.cos(camera.pitch);
         const nextPitch = Math.max(
           -Math.PI / 2 + 0.1,
           Math.min(Math.PI / 2 - 0.05, d.startPitch + dy * radPerPx),
@@ -167,7 +149,6 @@ export default function ExplorePage() {
           ...cam,
           yaw: ((nextYaw % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2),
           pitch: nextPitch,
-          roll: 0,
         }));
       }
     }
@@ -180,12 +161,7 @@ export default function ExplorePage() {
     if (pointers.current.size < 2) pinchRef.current = null;
 
     if (pointers.current.size === 0) {
-      // Tap to select (only for the last finger that wasn't dragging/pinching).
-      if (
-        !wasDragging &&
-        !wasPinching &&
-        dragRef.current?.pointerId === e.pointerId
-      ) {
+      if (!wasDragging && !wasPinching && dragRef.current?.pointerId === e.pointerId) {
         const container = containerRef.current;
         const canvas = container?.querySelector("canvas") as HTMLCanvasElement | null;
         if (canvas) {
@@ -193,7 +169,7 @@ export default function ExplorePage() {
           const dpr = canvas.width / rect.width;
           const x = (e.clientX - rect.left) * dpr;
           const y = (e.clientY - rect.top) * dpr;
-          const hit = canvasHandleRef.current?.hitTest(x, y);
+          const hit = canvasHandleRef.current?.hitTest(x, y, 44 * dpr);
           if (hit) setSelected(hit);
         }
       }
@@ -203,46 +179,26 @@ export default function ExplorePage() {
 
   const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     const factor = Math.exp(e.deltaY * 0.0015);
-    setCamera((cam) => ({
-      ...cam,
-      fovV: Math.max(MIN_FOV, Math.min(MAX_FOV, cam.fovV * factor)),
-    }));
+    setCamera((cam) => ({ ...cam, fovV: Math.max(MIN_FOV, Math.min(MAX_FOV, cam.fovV * factor)) }));
   };
 
   const zoom = useCallback((mult: number) => {
-    setCamera((cam) => ({
-      ...cam,
-      fovV: Math.max(MIN_FOV, Math.min(MAX_FOV, cam.fovV * mult)),
-    }));
+    setCamera((cam) => ({ ...cam, fovV: Math.max(MIN_FOV, Math.min(MAX_FOV, cam.fovV * mult)) }));
   }, []);
 
   const resetView = useCallback(() => {
-    setCamera({
-      yaw: Math.PI,
-      pitch: 0.6,
-      roll: 0,
-      fovV: DEFAULT_FOV,
-    });
+    setCamera({ yaw: Math.PI, pitch: 0.6, roll: 0, fovV: DEFAULT_FOV });
   }, []);
 
-  // --- Search: flatten everything, filter by query ---
+  // Search items list
   const searchItems = useMemo(() => {
-    const list: {
-      key: string;
-      label: string;
-      sub: string;
-      onSelect: () => void;
-    }[] = [];
+    const list: { key: string; label: string; sub: string; onSelect: () => void }[] = [];
     bodies.forEach((b) =>
       list.push({
         key: `body:${b.id}`,
         label: b.name,
         sub: b.kind === "sun" ? "Star" : b.kind === "moon" ? "Moon" : "Planet",
-        onSelect: () => {
-          centerOn(b.altRad, b.azRad, true);
-          setSelected({ ...b });
-          setSearchOpen(false);
-        },
+        onSelect: () => { centerOn(b.altRad, b.azRad, true); setSelected({ ...b }); setSearchOpen(false); },
       }),
     );
     STARS.forEach((s, i) => {
@@ -251,35 +207,20 @@ export default function ExplorePage() {
         key: `star:${s.id}`,
         label: s.name,
         sub: `${s.bayer ? s.bayer + " · " : ""}${s.constellation}`,
-        onSelect: () => {
-          centerOn(resolved.altRad, resolved.azRad, true);
-          setSelected({ kind: "star", ...resolved });
-          setSearchOpen(false);
-        },
+        onSelect: () => { centerOn(resolved.altRad, resolved.azRad, true); setSelected({ kind: "star", ...resolved }); setSearchOpen(false); },
       });
     });
     CONSTELLATIONS.forEach((c) => {
-      // Find average position of its stars.
-      const members = c.lines
-        .flat()
-        .map((i) => stars[i])
-        .filter(Boolean);
+      const members = c.lines.flat().map((i) => stars[i]).filter(Boolean);
       if (members.length === 0) return;
-      const avgAlt =
-        members.reduce((a, s) => a + s.altRad, 0) / members.length;
-      const avgAzX =
-        members.reduce((a, s) => a + Math.cos(s.azRad), 0) / members.length;
-      const avgAzY =
-        members.reduce((a, s) => a + Math.sin(s.azRad), 0) / members.length;
-      const avgAz = Math.atan2(avgAzY, avgAzX);
+      const avgAlt = members.reduce((a, s) => a + s.altRad, 0) / members.length;
+      const avgAzX = members.reduce((a, s) => a + Math.cos(s.azRad), 0) / members.length;
+      const avgAzY = members.reduce((a, s) => a + Math.sin(s.azRad), 0) / members.length;
       list.push({
         key: `const:${c.id}`,
         label: c.name,
         sub: "Constellation",
-        onSelect: () => {
-          centerOn(avgAlt, avgAz, false);
-          setSearchOpen(false);
-        },
+        onSelect: () => { centerOn(avgAlt, Math.atan2(avgAzY, avgAzX), false); setSearchOpen(false); },
       });
     });
     deepSky.forEach((d) =>
@@ -287,30 +228,21 @@ export default function ExplorePage() {
         key: `dso:${d.id}`,
         label: d.name,
         sub: d.type,
-        onSelect: () => {
-          centerOn(d.altRad, d.azRad, true);
-          setSelected({ kind: "dso", ...d });
-          setSearchOpen(false);
-        },
+        onSelect: () => { centerOn(d.altRad, d.azRad, true); setSelected({ kind: "dso", ...d }); setSearchOpen(false); },
       }),
     );
     return list;
   }, [bodies, stars, deepSky, centerOn]);
 
-  // Highlight the object nearest screen center (useful when zoomed in).
   const centerHint = useMemo(() => {
     let best: { name: string; dist: number } | null = null;
     for (const s of stars) {
       const d = angularDistance(s.altRad, s.azRad, camera.pitch, camera.yaw);
-      if (d < camera.fovV / 4 && (best == null || d < best.dist)) {
-        best = { name: s.name, dist: d };
-      }
+      if (d < camera.fovV / 4 && (best == null || d < best.dist)) best = { name: s.name, dist: d };
     }
     for (const b of bodies) {
       const d = angularDistance(b.altRad, b.azRad, camera.pitch, camera.yaw);
-      if (d < camera.fovV / 4 && (best == null || d < best.dist)) {
-        best = { name: b.name, dist: d };
-      }
+      if (d < camera.fovV / 4 && (best == null || d < best.dist)) best = { name: b.name, dist: d };
     }
     return best?.name;
   }, [stars, bodies, camera]);
@@ -347,39 +279,19 @@ export default function ExplorePage() {
             aria-label="Search sky"
             className="flex-1 flex items-center gap-2 rounded-xl px-3 py-2 bg-white/6 hover:bg-white/10 transition-colors"
           >
-            <svg
-              viewBox="0 0 24 24"
-              width="18"
-              height="18"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.7}
-              strokeLinecap="round"
-            >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round">
               <circle cx="11" cy="11" r="7" />
               <path d="m20 20-3.5-3.5" />
             </svg>
-            <span className="text-[13px] text-[var(--muted)]">
-              Search stars, planets, constellations
-            </span>
+            <span className="text-[13px] text-[var(--muted)]">Search stars, planets, constellations</span>
           </button>
           <button
             onClick={resetView}
             aria-label="Reset view"
             className="size-9 rounded-xl bg-white/6 hover:bg-white/10 flex items-center justify-center transition-colors"
           >
-            <svg
-              viewBox="0 0 24 24"
-              width="18"
-              height="18"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth={1.7}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <path d="M3 12a9 9 0 1 0 3-6.7" />
-              <path d="M3 4v5h5" />
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 4v5h5" />
             </svg>
           </button>
         </div>
@@ -394,95 +306,139 @@ export default function ExplorePage() {
 
       {/* Side toggles */}
       <div className="pointer-events-none absolute right-3 top-[calc(max(env(safe-area-inset-top),12px)+62px)] flex flex-col gap-2">
-        <ToggleButton
-          active={showConstellations}
-          onClick={() => setShowConstellations((v) => !v)}
-          label="Lines"
-        />
-        <ToggleButton
-          active={showLabels}
-          onClick={() => setShowLabels((v) => !v)}
-          label="Labels"
-        />
+        <ToggleButton active={showConstellations} onClick={() => setShowConstellations((v) => !v)} label="Lines" />
+        <ToggleButton active={showLabels} onClick={() => setShowLabels((v) => !v)} label="Labels" />
       </div>
 
       {/* Zoom controls */}
       <div className="pointer-events-none absolute left-3 top-[calc(max(env(safe-area-inset-top),12px)+62px)] flex flex-col gap-2">
-        <button
-          onClick={() => zoom(0.75)}
-          aria-label="Zoom in"
-          className="pointer-events-auto glass size-10 rounded-full flex items-center justify-center hover:bg-white/10 transition-colors"
-        >
+        <button onClick={() => zoom(0.75)} aria-label="Zoom in" className="pointer-events-auto glass size-10 rounded-full flex items-center justify-center hover:bg-white/10 transition-colors">
           <span className="text-xl leading-none">+</span>
         </button>
-        <button
-          onClick={() => zoom(1.33)}
-          aria-label="Zoom out"
-          className="pointer-events-auto glass size-10 rounded-full flex items-center justify-center hover:bg-white/10 transition-colors"
-        >
+        <button onClick={() => zoom(1.33)} aria-label="Zoom out" className="pointer-events-auto glass size-10 rounded-full flex items-center justify-center hover:bg-white/10 transition-colors">
           <span className="text-xl leading-none">−</span>
         </button>
       </div>
 
-      {/* Compass / info strip */}
-      <div className="pointer-events-none absolute bottom-[calc(env(safe-area-inset-bottom)+88px)] left-0 right-0 px-3">
+      {/* Time travel + compass strip above nav */}
+      <div className="pointer-events-none absolute bottom-[calc(env(safe-area-inset-bottom)+68px)] left-0 right-0 px-3 space-y-2">
+        {/* Compass / FOV strip */}
         <div className="glass mx-auto max-w-md rounded-2xl px-4 py-2 flex items-center justify-between text-[12px] font-medium text-[var(--foreground)]/85">
           <span>
             {((camera.yaw * 180) / Math.PI).toFixed(0)}°{" "}
-            <span className="text-[var(--muted)]">
-              {compass((camera.yaw * 180) / Math.PI)}
-            </span>
+            <span className="text-[var(--muted)]">{compassLabel((camera.yaw * 180) / Math.PI)}</span>
           </span>
-          <span className="text-[var(--muted)]">
-            alt {((camera.pitch * 180) / Math.PI).toFixed(0)}°
-          </span>
-          <span className="text-[var(--muted)]">
-            fov {((camera.fovV * 180) / Math.PI).toFixed(0)}°
-          </span>
+          <span className="text-[var(--muted)]">alt {((camera.pitch * 180) / Math.PI).toFixed(0)}°</span>
+          <span className="text-[var(--muted)]">fov {((camera.fovV * 180) / Math.PI).toFixed(0)}°</span>
         </div>
+
+        {/* Time travel bar */}
+        <TimeBar
+          offsetHours={timeOffsetHours}
+          now={now}
+          onChange={setTimeOffsetHours}
+        />
       </div>
 
       {searchOpen && (
-        <SearchSheet
-          items={searchItems}
-          onClose={() => setSearchOpen(false)}
-        />
+        <SearchOverlay items={searchItems} onClose={() => setSearchOpen(false)} />
       )}
 
-      <ObjectInfoModal
-        object={selected}
-        onClose={() => setSelected(null)}
-        onCenter={handleCenterObject}
-      />
+      <ObjectInfoModal object={selected} onClose={() => setSelected(null)} onCenter={handleCenterObject} />
     </div>
   );
 }
 
-function ToggleButton({
-  active,
-  onClick,
-  label,
+// ---- Time Travel Bar -------------------------------------------------------
+
+function TimeBar({
+  offsetHours,
+  now,
+  onChange,
 }: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
+  offsetHours: number;
+  now: Date;
+  onChange: (h: number) => void;
 }) {
+  const [showPicker, setShowPicker] = useState(false);
+
+  const fmt = new Intl.DateTimeFormat(undefined, {
+    month: "short", day: "numeric", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+
+  const offsetLabel =
+    offsetHours === 0
+      ? "Now"
+      : Math.abs(offsetHours) < 24
+        ? `${offsetHours > 0 ? "+" : ""}${offsetHours}h`
+        : `${offsetHours > 0 ? "+" : ""}${(offsetHours / 24).toFixed(1)}d`;
+
+  // Convert datetime-local string to offset hours from real now.
+  const handlePickerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.value) return;
+    const picked = new Date(e.target.value);
+    const diffMs = picked.getTime() - Date.now();
+    onChange(Math.round(diffMs / 3_600_000));
+  };
+
+  const localDateStr = (d: Date) => {
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+
   return (
-    <button
-      onClick={onClick}
-      className={[
-        "pointer-events-auto glass rounded-full px-3 py-1.5 text-[11px] font-semibold tracking-wide uppercase transition-colors",
-        active
-          ? "text-[var(--accent-strong)] border-[var(--border-strong)]"
-          : "text-[var(--muted)]",
-      ].join(" ")}
-    >
-      {label}
-    </button>
+    <div className="pointer-events-auto glass-strong mx-auto max-w-md rounded-2xl px-4 pt-3 pb-3">
+      <div className="flex items-center gap-2 mb-2">
+        <button
+          onClick={() => setShowPicker((v) => !v)}
+          className="flex-1 text-left"
+        >
+          <span className="text-[13px] font-semibold">{fmt.format(now)}</span>
+          {offsetHours !== 0 && (
+            <span className="ml-2 text-[11px] text-[var(--accent-strong)] font-semibold">{offsetLabel}</span>
+          )}
+        </button>
+        {offsetHours !== 0 && (
+          <button
+            onClick={() => onChange(0)}
+            className="text-[11px] font-semibold text-[var(--accent-strong)] bg-[var(--accent)]/15 rounded-lg px-2.5 py-1 hover:bg-[var(--accent)]/25 transition-colors"
+          >
+            Back to now
+          </button>
+        )}
+      </div>
+
+      {showPicker && (
+        <input
+          type="datetime-local"
+          value={localDateStr(now)}
+          onChange={handlePickerChange}
+          className="w-full mb-2 bg-white/8 rounded-xl px-3 py-2 text-[13px] outline-none focus:bg-white/12 text-[var(--foreground)]"
+        />
+      )}
+
+      <input
+        type="range"
+        min={-168}
+        max={168}
+        step={1}
+        value={offsetHours}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full accent-[var(--accent)] h-1 rounded-full cursor-pointer"
+        aria-label="Time offset in hours"
+      />
+      <div className="flex justify-between text-[10px] text-[var(--muted)] mt-1 select-none">
+        <span>−7 days</span>
+        <span>+7 days</span>
+      </div>
+    </div>
   );
 }
 
-function SearchSheet({
+// ---- Search Overlay (top-anchored, keyboard-safe) --------------------------
+
+function SearchOverlay({
   items,
   onClose,
 }: {
@@ -490,83 +446,100 @@ function SearchSheet({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    // Slight delay so the animation starts before focus triggers keyboard.
+    const t = setTimeout(() => inputRef.current?.focus(), 80);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Close on Escape.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return items.slice(0, 40);
-    return items
-      .filter(
-        (i) =>
-          i.label.toLowerCase().includes(q) ||
-          i.sub.toLowerCase().includes(q),
-      )
-      .slice(0, 40);
+    if (!q) return items.slice(0, 50);
+    return items.filter(
+      (i) => i.label.toLowerCase().includes(q) || i.sub.toLowerCase().includes(q),
+    ).slice(0, 50);
   }, [items, query]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center pointer-events-none">
-      <div
-        className="absolute inset-0 bg-black/50 fade-in pointer-events-auto"
-        onClick={onClose}
-      />
-      <div className="glass-strong sheet-up pointer-events-auto relative w-full max-w-md mx-3 mb-[max(env(safe-area-inset-bottom),12px)] rounded-3xl overflow-hidden shadow-[0_18px_50px_rgba(0,0,0,0.6)]">
-        <div className="h-1 w-10 bg-white/20 rounded-full mx-auto mt-2" />
-        <div className="p-4">
+    <div className="fixed inset-0 z-50 flex flex-col">
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/60 fade-in" onClick={onClose} />
+
+      {/* Panel — slides in from top, takes only as much height as content + safe areas */}
+      <div className="relative z-10 flex flex-col w-full max-h-[85dvh] glass-strong shadow-[0_18px_60px_rgba(0,0,0,0.7)] sheet-down">
+        {/* Search input row */}
+        <div className="flex items-center gap-3 px-4 pt-[max(env(safe-area-inset-top),16px)] pb-3 border-b border-white/8">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" className="shrink-0 text-[var(--muted)]">
+            <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
+          </svg>
           <input
-            autoFocus
+            ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search stars, planets, constellations…"
-            className="w-full bg-white/6 rounded-xl px-4 py-3 text-[14px] outline-none focus:bg-white/10 placeholder:text-[var(--muted)]"
+            className="flex-1 bg-transparent text-[15px] outline-none placeholder:text-[var(--muted)]"
           />
-          <ul className="mt-3 max-h-[55dvh] overflow-y-auto divide-y divide-white/5">
-            {filtered.length === 0 && (
-              <li className="py-8 text-center text-sm text-[var(--muted)]">
-                No results.
-              </li>
-            )}
-            {filtered.map((item) => (
-              <li key={item.key}>
-                <button
-                  onClick={item.onSelect}
-                  className="w-full text-left py-3 px-1 flex items-center justify-between gap-4 hover:bg-white/5 rounded-lg transition-colors"
-                >
-                  <div className="min-w-0">
-                    <p className="text-[14.5px] font-medium truncate">
-                      {item.label}
-                    </p>
-                    <p className="text-[12px] text-[var(--muted)] truncate">
-                      {item.sub}
-                    </p>
-                  </div>
-                  <svg
-                    viewBox="0 0 24 24"
-                    width="16"
-                    height="16"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={1.7}
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className="text-[var(--muted)]"
-                  >
-                    <path d="m9 6 6 6-6 6" />
-                  </svg>
-                </button>
-              </li>
-            ))}
-          </ul>
+          <button
+            onClick={onClose}
+            className="shrink-0 text-[13px] font-semibold text-[var(--accent-strong)] px-1 py-1"
+          >
+            Cancel
+          </button>
         </div>
+
+        {/* Results */}
+        <ul className="overflow-y-auto overscroll-contain divide-y divide-white/5 flex-1">
+          {filtered.length === 0 && (
+            <li className="py-12 text-center text-sm text-[var(--muted)]">No results.</li>
+          )}
+          {filtered.map((item) => (
+            <li key={item.key}>
+              <button
+                onClick={item.onSelect}
+                className="w-full text-left py-3.5 px-4 flex items-center justify-between gap-4 hover:bg-white/5 active:bg-white/8 transition-colors"
+              >
+                <div className="min-w-0">
+                  <p className="text-[14.5px] font-medium truncate">{item.label}</p>
+                  <p className="text-[12px] text-[var(--muted)] truncate">{item.sub}</p>
+                </div>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-[var(--muted)]">
+                  <path d="m9 6 6 6-6 6" />
+                </svg>
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
 }
 
-function compass(azDeg: number): string {
-  const dirs = [
-    "N", "NNE", "NE", "ENE",
-    "E", "ESE", "SE", "SSE",
-    "S", "SSW", "SW", "WSW",
-    "W", "WNW", "NW", "NNW",
-  ];
-  const norm = ((azDeg % 360) + 360) % 360;
-  return dirs[Math.round(norm / 22.5) % 16];
+// ---- Helpers ---------------------------------------------------------------
+
+function ToggleButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={[
+        "pointer-events-auto glass rounded-full px-3 py-1.5 text-[11px] font-semibold tracking-wide uppercase transition-colors",
+        active ? "text-[var(--accent-strong)] border-[var(--border-strong)]" : "text-[var(--muted)]",
+      ].join(" ")}
+    >
+      {label}
+    </button>
+  );
+}
+
+function compassLabel(azDeg: number): string {
+  const dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+  return dirs[Math.round(((azDeg % 360) + 360) % 360 / 22.5) % 16];
 }
