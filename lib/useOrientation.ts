@@ -96,37 +96,23 @@ export function useOrientation(enabled: boolean): OrientationHook {
       window.removeEventListener(eventName, handler as EventListener, true);
   }, [enabled, permission, state.hasReading]);
 
-  // Smoothing loop (target → state)
+  // Smoothing loop (target → state). Simple lerp for all axes — roll's
+  // zenith singularity is handled inside orientationToCamera (zMag guard),
+  // and yaw derived from the look-vector via atan2 is well-defined at any
+  // non-vertical pitch, so there's no reason to dampen yaw based on pitch.
   useEffect(() => {
     if (!enabled) return;
     const loop = () => {
       const target = targetRef.current;
       setState((prev) => {
         if (!target.hasReading) return prev;
-        const t = 0.28;
-        // Only dampen yaw/roll near the zenith/nadir where gimbal lock makes
-        // them unreliable. Below ~60° pitch they track at full speed; between
-        // 60° and ~84° they fade to zero.
-        const pitchAbs = Math.abs(target.pitch);
-        const fadeStart = Math.PI / 3; // 60°
-        const fadeEnd = Math.PI / 2 - 0.1; // ~84°
-        const yawScale =
-          pitchAbs <= fadeStart
-            ? 1
-            : pitchAbs >= fadeEnd
-              ? 0
-              : (fadeEnd - pitchAbs) / (fadeEnd - fadeStart);
-        const dampedT = t * yawScale;
+        const t = 0.35;
         return {
           hasReading: true,
           absolute: target.absolute,
-          yaw: yawScale > 0
-            ? lerpAngle(prev.yaw, target.yaw, dampedT)
-            : prev.yaw,
+          yaw: lerpAngle(prev.yaw, target.yaw, t),
           pitch: lerp(prev.pitch, target.pitch, t),
-          roll: yawScale > 0
-            ? lerpAngle(prev.roll, target.roll, dampedT)
-            : prev.roll,
+          roll: lerpAngle(prev.roll, target.roll, t),
         };
       });
       rafRef.current = requestAnimationFrame(loop);
