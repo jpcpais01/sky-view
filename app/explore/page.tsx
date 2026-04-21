@@ -321,7 +321,7 @@ export default function ExplorePage() {
       </div>
 
       {/* Time travel + compass strip above nav */}
-      <div className="pointer-events-none absolute bottom-[calc(env(safe-area-inset-bottom)+68px)] left-0 right-0 px-3 space-y-2">
+      <div className="pointer-events-none absolute bottom-[calc(env(safe-area-inset-bottom)+88px)] left-0 right-0 px-3 space-y-2">
         {/* Compass / FOV strip */}
         <div className="glass mx-auto max-w-md rounded-2xl px-4 py-2 flex items-center justify-between text-[12px] font-medium text-[var(--foreground)]/85">
           <span>
@@ -388,8 +388,8 @@ function TimeBar({
   };
 
   return (
-    <div className="pointer-events-auto glass-strong mx-auto max-w-md rounded-2xl px-4 pt-3 pb-3">
-      <div className="flex items-center gap-2 mb-2">
+    <div className="pointer-events-auto glass-strong mx-auto max-w-md rounded-2xl px-4 pt-2 pb-2">
+      <div className="flex items-center gap-2 mb-1.5">
         <button
           onClick={() => setShowPicker((v) => !v)}
           className="flex-1 text-left"
@@ -428,7 +428,7 @@ function TimeBar({
         className="w-full accent-[var(--accent)] h-1 rounded-full cursor-pointer"
         aria-label="Time offset in hours"
       />
-      <div className="flex justify-between text-[10px] text-[var(--muted)] mt-1 select-none">
+      <div className="flex justify-between text-[10px] text-[var(--muted)] mt-0.5 select-none">
         <span>−7 days</span>
         <span>+7 days</span>
       </div>

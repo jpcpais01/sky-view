@@ -120,7 +120,9 @@ export default function SkyPage() {
     [orientation, requestLocation, setManual],
   );
 
-  const onTap = (e: React.PointerEvent<HTMLDivElement>) => {
+  // Use onClick (fires during click event) so React renders the modal AFTER
+  // the event completes — prevents the synthesised click from ghost-closing it.
+  const onTap = (e: React.MouseEvent<HTMLDivElement>) => {
     const canvas = e.currentTarget.querySelector("canvas");
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
@@ -154,7 +156,7 @@ export default function SkyPage() {
 
   return (
     <div className="fixed inset-0 overflow-hidden">
-      <div className="absolute inset-0" onPointerUp={onTap}>
+      <div className="absolute inset-0" onClick={onTap}>
         <SkyCanvas
           ref={canvasRef}
           stars={stars}

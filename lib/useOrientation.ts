@@ -103,13 +103,22 @@ export function useOrientation(enabled: boolean): OrientationHook {
       const target = targetRef.current;
       setState((prev) => {
         if (!target.hasReading) return prev;
-        const t = 0.28; // lerp factor — snappier tilt tracking
+        const t = 0.28;
+        // Near zenith/nadir the compass yaw is unreliable (gimbal lock) and the
+        // roll formula becomes singular. Scale both down by cos(pitch) so they
+        // freeze naturally as the phone points toward the zenith.
+        const pitchCos = Math.max(0, Math.cos(target.pitch));
+        const dampedT = t * pitchCos;
         return {
           hasReading: true,
           absolute: target.absolute,
-          yaw: lerpAngle(prev.yaw, target.yaw, t),
+          yaw: pitchCos > 0.05
+            ? lerpAngle(prev.yaw, target.yaw, dampedT)
+            : prev.yaw,
           pitch: lerp(prev.pitch, target.pitch, t),
-          roll: lerpAngle(prev.roll, target.roll, t),
+          roll: pitchCos > 0.05
+            ? lerpAngle(prev.roll, target.roll, dampedT)
+            : prev.roll,
         };
       });
       rafRef.current = requestAnimationFrame(loop);
@@ -227,10 +236,15 @@ function orientationToCamera(
   const cross_z = zx * upy - zy * upx;
   const sign = cross_x * dx + cross_y * dy + cross_z * dz;
   const upMag = Math.sqrt(upx * upx + upy * upy + upz * upz) || 1;
-  const zMag = Math.sqrt(zx * zx + zy * zy + zz * zz) || 1;
-  const cosRoll = (upx * zx + upy * zy + upz * zz) / (upMag * zMag);
-  let roll = Math.acos(Math.max(-1, Math.min(1, cosRoll)));
-  if (sign < 0) roll = -roll;
+  const zMag = Math.sqrt(zx * zx + zy * zy + zz * zz);
+  // zMag → 0 when looking straight up/down (zenith/nadir singularity).
+  // Roll is undefined there — return 0 and let the smoothing loop hold it.
+  let roll = 0;
+  if (zMag > 0.1) {
+    const cosRoll = (upx * zx + upy * zy + upz * zz) / (upMag * zMag);
+    roll = Math.acos(Math.max(-1, Math.min(1, cosRoll)));
+    if (sign < 0) roll = -roll;
+  }
 
   // Apply screen rotation compensation.
   roll += (screenAngle * Math.PI) / 180;
