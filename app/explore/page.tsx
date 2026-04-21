@@ -92,6 +92,7 @@ export default function ExplorePage() {
     moved: boolean;
     pointerId: number;
   } | null>(null);
+  const tapBlockedRef = useRef(false);
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -161,20 +162,27 @@ export default function ExplorePage() {
     if (pointers.current.size < 2) pinchRef.current = null;
 
     if (pointers.current.size === 0) {
-      if (!wasDragging && !wasPinching && dragRef.current?.pointerId === e.pointerId) {
-        const container = containerRef.current;
-        const canvas = container?.querySelector("canvas") as HTMLCanvasElement | null;
-        if (canvas) {
-          const rect = canvas.getBoundingClientRect();
-          const dpr = canvas.width / rect.width;
-          const x = (e.clientX - rect.left) * dpr;
-          const y = (e.clientY - rect.top) * dpr;
-          const hit = canvasHandleRef.current?.hitTest(x, y, 44 * dpr);
-          if (hit) setSelected(hit);
-        }
-      }
+      // Block the synthesised click only when the gesture wasn't a plain tap.
+      tapBlockedRef.current = wasDragging || wasPinching;
       dragRef.current = null;
     }
+  };
+
+  // Hit-test on click so React renders the modal AFTER the event completes —
+  // prevents the synthesised click from ghost-closing it.
+  const onClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (tapBlockedRef.current) {
+      tapBlockedRef.current = false;
+      return;
+    }
+    const canvas = e.currentTarget.querySelector("canvas") as HTMLCanvasElement | null;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const dpr = canvas.width / rect.width;
+    const x = (e.clientX - rect.left) * dpr;
+    const y = (e.clientY - rect.top) * dpr;
+    const hit = canvasHandleRef.current?.hitTest(x, y, 44 * dpr);
+    if (hit) setSelected(hit);
   };
 
   const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
@@ -255,6 +263,7 @@ export default function ExplorePage() {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        onClick={onClick}
         onWheel={onWheel}
         className="absolute inset-0 touch-none"
         style={{ cursor: "grab" }}

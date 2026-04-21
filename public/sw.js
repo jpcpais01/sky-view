@@ -1,5 +1,5 @@
 // Sky View — minimal offline-shell service worker.
-const VERSION = "skyview-v1";
+const VERSION = "skyview-v2";
 const SHELL = ["/", "/sky", "/explore", "/manifest.webmanifest", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
@@ -28,18 +28,23 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // Network-first for navigations, cache-first for static.
+  // Stale-while-revalidate for navigations so page changes feel instant
+  // (no visible browser loading bar waiting on the network). We still update
+  // the cache in the background so the next visit gets the fresh version.
   if (req.mode === "navigate") {
     event.respondWith(
-      fetch(req)
-        .then((res) => {
-          const copy = res.clone();
-          caches.open(VERSION).then((c) => c.put(req, copy)).catch(() => {});
-          return res;
-        })
-        .catch(() =>
-          caches.match(req).then((cached) => cached || caches.match("/")),
-        ),
+      caches.match(req).then((cached) => {
+        const fetchPromise = fetch(req)
+          .then((res) => {
+            if (res && res.status === 200) {
+              const copy = res.clone();
+              caches.open(VERSION).then((c) => c.put(req, copy)).catch(() => {});
+            }
+            return res;
+          })
+          .catch(() => cached || caches.match("/"));
+        return cached || fetchPromise;
+      }),
     );
     return;
   }

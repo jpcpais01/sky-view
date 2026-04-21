@@ -104,19 +104,27 @@ export function useOrientation(enabled: boolean): OrientationHook {
       setState((prev) => {
         if (!target.hasReading) return prev;
         const t = 0.28;
-        // Near zenith/nadir the compass yaw is unreliable (gimbal lock) and the
-        // roll formula becomes singular. Scale both down by cos(pitch) so they
-        // freeze naturally as the phone points toward the zenith.
-        const pitchCos = Math.max(0, Math.cos(target.pitch));
-        const dampedT = t * pitchCos;
+        // Only dampen yaw/roll near the zenith/nadir where gimbal lock makes
+        // them unreliable. Below ~60° pitch they track at full speed; between
+        // 60° and ~84° they fade to zero.
+        const pitchAbs = Math.abs(target.pitch);
+        const fadeStart = Math.PI / 3; // 60°
+        const fadeEnd = Math.PI / 2 - 0.1; // ~84°
+        const yawScale =
+          pitchAbs <= fadeStart
+            ? 1
+            : pitchAbs >= fadeEnd
+              ? 0
+              : (fadeEnd - pitchAbs) / (fadeEnd - fadeStart);
+        const dampedT = t * yawScale;
         return {
           hasReading: true,
           absolute: target.absolute,
-          yaw: pitchCos > 0.05
+          yaw: yawScale > 0
             ? lerpAngle(prev.yaw, target.yaw, dampedT)
             : prev.yaw,
           pitch: lerp(prev.pitch, target.pitch, t),
-          roll: pitchCos > 0.05
+          roll: yawScale > 0
             ? lerpAngle(prev.roll, target.roll, dampedT)
             : prev.roll,
         };
